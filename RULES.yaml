@@ -1,0 +1,36 @@
+# RULES.yaml -- adjudication rules for the MIB doc challenge, in priority order.
+# src/rules.py implements these exactly (matching rule_id + citation on each rule).
+# citation = "manual: <section>" (FIELD_MANUAL via CONTEXT.md) or "DEV-mined: <evidence>".
+# Anti-gaming: no case-id keys, no per-document thresholds. Only mined value-list is
+# revoked_sponsors, which the manual explicitly invites; each mined entry >=5 support.
+
+mined_value_lists:
+  revoked_sponsors: [SPN-0007, SPN-0139, SPN-4040, SPN-2718, SPN-7331, SPN-9090]
+  # SPN-0007/0139/4040 from manual; SPN-2718/7331/9090 DEV-mined (each: 100% of its
+  # non-DIP DEV cases DENIED, support 9/9, 9/9, 5/5).
+  disqualifying_flags: [memory_tampering, planetary_embargo, active_warrant, biohazard_red]
+  review_flags: [identity_conflict, sponsor_mismatch, illegible_biometrics, rescinded_denial]
+
+rules:
+  # --- HARD DENY (disqualifying conditions; fire before review/uncertainty) ---
+  - {id: R01, condition: "usable(risk_flags) and flags & disqualifying_flags", outcome: DENIED, citation: "manual: risk flags disqualifying; DEV-mined: 154/154 DEV cases DENIED"}
+  - {id: R02, condition: "usable(visa_class) and visa == TRANSIT-7", outcome: DENIED, citation: "manual: TRANSIT-7 work auth usually DENIED; DEV-mined: 42/42 DEV cases DENIED"}
+  - {id: R03, condition: "usable(fee_status) and fee == unpaid", outcome: DENIED, citation: "manual: unpaid mandatory fee -> DENY; DEV-mined: 41/41 DEV cases DENIED"}
+  - {id: R04, condition: "usable(sponsor_id) and usable(visa_class) and visa != DIP-1 and sponsor in revoked_sponsors", outcome: DENIED, citation: "manual: valid sponsor required unless DIP-1 + revoked list; DEV-mined: 61/61 (0 non-DIP exceptions)"}
+
+  # --- APPROVAL-STAMP RESCUE (visible adjudicator stamp = evidence precedence #1) ---
+  - {id: R05, condition: "'approval_stamp' in doc.stamps and 'sample_watermark' not in doc.stamps and no hard-DENY signal (disqualifying flag / TRANSIT-7 / unpaid / revoked-non-DIP)", outcome: APPROVED, citation: "manual: evidence precedence #1 visible MIB adjudicator stamp (CONTEXT.md); sample-watermark trap excluded. DEV-mined: EXTRACTOR detector 25/25 stamped docs gold APPROVED, held-back precision 1.000; rescues ~16 NEEDS_REVIEW->APPROVED. Ordered AFTER R01-R04 + self-guarded so it can never override a DENY path; stress test (scripts/check_stamp_safety.py): 0 hard-signal flips under worst-case all-stamped injection"}
+
+  # --- NEEDS_REVIEW (review-only signals / unrecoverable / contradictory evidence) ---
+  - {id: R10, condition: "usable(risk_flags) and flags & review_flags", outcome: NEEDS_REVIEW, citation: "manual: review-only flags -> NEEDS_REVIEW; DEV-mined: NR-dominant, escalating to DENIED loses raw points"}
+  - {id: R11, condition: "usable(fee_status) and fee == unknown", outcome: NEEDS_REVIEW, citation: "manual: unknown fee -> NEEDS_REVIEW; DEV-mined: 35/35 DEV cases NR"}
+  - {id: R12, condition: "doc.illegible or doc.hidden_text or doc.injection_suspected", outcome: NEEDS_REVIEW, citation: "manual: illegible / recoverable only from untrusted hidden text -> NR (extractor-facing)"}
+  - {id: R15, condition: "visa != DIP-1 and usable(arrival_date) and usable(receipt_date) and (receipt - arrival) > 180d", outcome: NEEDS_REVIEW, citation: "manual: stale if arrival >180d before receipt except DIP-1 w/ note (extractor-facing; never fires on gold; conservative NR avoids false-APPROVE -4)"}
+  - {id: R13, condition: "not usable(arrival_date)", outcome: NEEDS_REVIEW, citation: "manual: arrival missing / hidden-text-only -> NEEDS_REVIEW"}
+  - {id: R14, condition: "any decision-relevant field (risk_flags,visa_class,sponsor_id,fee_status,arrival_date) not usable", outcome: NEEDS_REVIEW, citation: "manual: evidence missing/contradictory/illegible -> NR (safe fallback, extractor-facing)"}
+  - {id: R20, condition: "visa != DIP-1 and sponsor_id not matching SPN-####", outcome: NEEDS_REVIEW, citation: "manual: valid SPN-#### required unless DIP-1 (missing/forged unverifiable -> NR)"}
+
+  # --- DEFAULT APPROVE ---
+  - {id: R99, condition: "identity + sponsor + fee + visa + risk all clean", outcome: APPROVED, citation: "manual/PRD baseline: APPROVED iff all clean. waived treated as OK (DEV: non-DIP waived + valid sponsor + clean is APPROVED-dominant; hardship-waiver visibility is the only separator and is not a trusted output field)"}
+
+  - {id: R_ERR, condition: "any unexpected exception", outcome: NEEDS_REVIEW, citation: "contract: adjudicate() must never raise -> safest fallback"}
